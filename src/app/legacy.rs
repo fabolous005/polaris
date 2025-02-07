@@ -89,7 +89,7 @@ fn read_users(db_file_path: &PathBuf) -> Result<HashMap<u32, config::storage::Us
 	Ok(users)
 }
 
-fn sanitize_path(source: &PathBuf) -> PathBuf {
+fn sanitize_path(source: &Path) -> PathBuf {
 	let path_string = source.to_string_lossy();
 	let separator_regex = Regex::new(r"\\|/").unwrap();
 	let mut correct_separator = String::new();
@@ -99,7 +99,7 @@ fn sanitize_path(source: &PathBuf) -> PathBuf {
 }
 
 fn virtualize_path(
-	real_path: &PathBuf,
+	real_path: &Path,
 	mount_dirs: &Vec<config::storage::MountDir>,
 ) -> Result<PathBuf, Error> {
 	let sanitized = sanitize_path(real_path); // Paths in test database use `/` separators, but need `\` when running tests on Windows
@@ -108,7 +108,7 @@ fn virtualize_path(
 			return Ok(Path::new(&mount_dir.name).join(tail));
 		}
 	}
-	Err(Error::CouldNotMapToVirtualPath(real_path.clone()))
+	Err(Error::CouldNotMapToVirtualPath(real_path.to_path_buf()))
 }
 
 pub async fn read_legacy_playlists(

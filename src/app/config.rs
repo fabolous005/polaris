@@ -105,7 +105,7 @@ impl Manager {
 
 		debouncer
 			.watcher()
-			.watch(&config_file_path, RecursiveMode::NonRecursive)?;
+			.watch(config_file_path, RecursiveMode::NonRecursive)?;
 
 		let manager = Self {
 			config_file_path: config_file_path.to_owned(),
@@ -214,7 +214,7 @@ impl Manager {
 	}
 
 	pub async fn get_users(&self) -> Vec<User> {
-		self.config.read().await.users.iter().cloned().collect()
+		self.config.read().await.users.to_vec()
 	}
 
 	pub async fn get_user(&self, username: &str) -> Result<User, Error> {
@@ -265,7 +265,7 @@ impl Manager {
 
 	pub async fn get_mounts(&self) -> Vec<MountDir> {
 		let config = self.config.read().await;
-		config.mount_dirs.iter().cloned().collect()
+		config.mount_dirs.to_vec()
 	}
 
 	pub async fn resolve_virtual_path<P: AsRef<Path>>(
