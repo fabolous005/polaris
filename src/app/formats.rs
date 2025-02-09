@@ -1,6 +1,6 @@
 use id3::TagLike;
 use lewton::inside_ogg::OggStreamReader;
-use log::error;
+use log::{error, info};
 use std::fs;
 use std::io::{Seek, SeekFrom};
 use std::path::Path;
@@ -364,10 +364,11 @@ fn read_flac<P: AsRef<Path>>(path: P, config_tags: HashMap<String, ConfTag>) -> 
 
     let mut tags = HashMap::new();
     for (key, conf_tag) in config_tags {
-        // TODO: check if this is okay
+        // TODO: check if this is okay (metavalue.first)
         if let Some(metavalue) = vorbis.comments.get(&key) {
-            if let Some(value) = metavalue.get(0) {
-                if value.len() >= 1 {
+            if let Some(value) = metavalue.first() {
+                if !value.is_empty() {
+                    info!("Found custom tag {key} with value {value}");
                     tags.insert(key, Tag::from_conf_tag(conf_tag, value.as_ref()));
                 }
             }
