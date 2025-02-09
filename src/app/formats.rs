@@ -4,12 +4,66 @@ use log::error;
 use std::fs;
 use std::io::{Seek, SeekFrom};
 use std::path::Path;
+use std::collections::HashMap;
 
 use crate::app::Error;
 use crate::utils;
 use crate::utils::AudioFormat;
+use crate::app::config::Tag as ConfTag;
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct WeightTag {
+    value: String,
+    weight: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TagKind {
+    FieldCollection(Vec<String>),
+    FieldSingle(String),
+    AmountCollection(Vec<WeightTag>),
+    AmountSingle(WeightTag),
+}
+
+impl Default for TagKind {
+    fn default() -> Self {
+        TagKind::FieldSingle("".into())
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Tag {
+    show: bool,
+    value: TagKind,
+}
+
+impl Tag {
+    fn from_conf_tag(conf_tag: ConfTag, metavalue: &str) -> Self {
+        Self {
+            show: conf_tag.show,
+            value: match (conf_tag.weight, conf_tag.collection) {
+                (false, false) => TagKind::FieldSingle(metavalue.into()),
+                (false, true) => TagKind::FieldCollection(
+                    metavalue.split(';').map(|s| String::from(s)).collect()
+                ),
+                (true, false) => TagKind::AmountSingle(
+                    metavalue.split_once(':').map(|(value, weight)|
+                        WeightTag {value: value.into(), weight: weight.parse().unwrap()}
+                    ).unwrap()
+                ),
+                (true, true) => TagKind::AmountCollection(metavalue.split(';').map(|s|
+                        s.split_once(':').map(|(value, weight)|
+                            WeightTag {value: value.into(), weight: weight.parse().unwrap()}
+                        ).unwrap()
+                    ).collect()
+                )
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SongMetadata {
 	pub disc_number: Option<u32>,
 	pub track_number: Option<u32>,
@@ -24,18 +78,19 @@ pub struct SongMetadata {
 	pub composers: Vec<String>,
 	pub genres: Vec<String>,
 	pub labels: Vec<String>,
+    pub tags: HashMap<String, Tag>,
 }
 
-pub fn read_metadata<P: AsRef<Path>>(path: P) -> Option<SongMetadata> {
+pub fn read_metadata<P: AsRef<Path>>(path: P, tags: HashMap<String, ConfTag>) -> Option<SongMetadata> {
 	let data = match utils::get_audio_format(&path) {
-		Some(AudioFormat::AIFF) => read_id3(&path),
-		Some(AudioFormat::FLAC) => read_flac(&path),
-		Some(AudioFormat::MP3) => read_mp3(&path),
-		Some(AudioFormat::OGG) => read_vorbis(&path),
-		Some(AudioFormat::OPUS) => read_opus(&path),
-		Some(AudioFormat::WAVE) => read_id3(&path),
-		Some(AudioFormat::APE) | Some(AudioFormat::MPC) => read_ape(&path),
-		Some(AudioFormat::MP4) | Some(AudioFormat::M4B) => read_mp4(&path),
+		Some(AudioFormat::AIFF) => read_id3(&path, tags),
+		Some(AudioFormat::FLAC) => read_flac(&path, tags),
+		Some(AudioFormat::MP3) => read_mp3(&path, tags),
+		Some(AudioFormat::OGG) => read_vorbis(&path, tags),
+		Some(AudioFormat::OPUS) => read_opus(&path, tags),
+		Some(AudioFormat::WAVE) => read_id3(&path, tags),
+		Some(AudioFormat::APE) | Some(AudioFormat::MPC) => read_ape(&path, tags),
+		Some(AudioFormat::MP4) | Some(AudioFormat::M4B) => read_mp4(&path, tags),
 		None => return None,
 	};
 	match data {
@@ -64,12 +119,12 @@ impl ID3Ext for id3::Tag {
 	}
 }
 
-fn read_id3<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
+fn read_id3<P: AsRef<Path>>(path: P, tags: HashMap<String, ConfTag>) -> Result<SongMetadata, Error> {
 	let file = fs::File::open(path.as_ref()).map_err(|e| Error::Io(path.as_ref().to_owned(), e))?;
-	read_id3_from_file(&file, path)
+	read_id3_from_file(&file, path, tags)
 }
 
-fn read_id3_from_file<P: AsRef<Path>>(file: &fs::File, path: P) -> Result<SongMetadata, Error> {
+fn read_id3_from_file<P: AsRef<Path>>(file: &fs::File, path: P, config_tags: HashMap<String, ConfTag>) -> Result<SongMetadata, Error> {
 	let tag = id3::Tag::read_from2(file)
 		.or_else(|error| {
 			if let Some(tag) = error.partial_tag {
@@ -98,6 +153,19 @@ fn read_id3_from_file<P: AsRef<Path>>(file: &fs::File, path: P) -> Result<SongMe
 	let genres = tag.get_text_values("TCON");
 	let labels = tag.get_text_values("TPUB");
 
+    let mut tags = HashMap::new();
+    for (key, conf_tag) in config_tags {
+        // let metavalue: &str = tag.get("key").and_then(|f| f.content().text()).or(|| continue).into();
+        let metavalue = if let Some(metavalue) = tag.get(&key).and_then(|f| f.content().text()) {
+            metavalue
+        } else {
+            continue;
+        };
+        if metavalue.len() >= 1 {
+            tags.insert(key, Tag::from_conf_tag(conf_tag, metavalue));
+        };
+    }
+
 	Ok(SongMetadata {
 		disc_number,
 		track_number,
@@ -112,12 +180,13 @@ fn read_id3_from_file<P: AsRef<Path>>(file: &fs::File, path: P) -> Result<SongMe
 		composers,
 		genres,
 		labels,
+        tags
 	})
 }
 
-fn read_mp3<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
+fn read_mp3<P: AsRef<Path>>(path: P, tags: HashMap<String, ConfTag>) -> Result<SongMetadata, Error> {
 	let mut file = fs::File::open(&path).unwrap();
-	let mut metadata = read_id3_from_file(&file, &path)?;
+	let mut metadata = read_id3_from_file(&file, &path, tags)?;
 	metadata.duration = metadata.duration.or_else(|| {
 		file.seek(SeekFrom::Start(0)).unwrap();
 		mp3_duration::from_file(&file)
@@ -166,7 +235,7 @@ mod ape_ext {
 	}
 }
 
-fn read_ape<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
+fn read_ape<P: AsRef<Path>>(path: P, config_tags: HashMap<String, ConfTag>) -> Result<SongMetadata, Error> {
 	let tag = ape::read_from_path(path)?;
 	let artists = ape_ext::read_strings(tag.item("Artist"));
 	let album = tag.item("Album").and_then(ape_ext::read_string);
@@ -179,6 +248,18 @@ fn read_ape<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
 	let composers = ape_ext::read_strings(tag.item("COMPOSER"));
 	let genres = ape_ext::read_strings(tag.item("GENRE"));
 	let labels = ape_ext::read_strings(tag.item("PUBLISHER"));
+    let mut tags = HashMap::new();
+
+    for (key, conf_tag) in config_tags {
+        if let Some(metavalue) = tag.item(key.as_ref()) {
+            if let Some(value) = ape_ext::read_string(metavalue) {
+                if value.len() >= 1 {
+                    tags.insert(key, Tag::from_conf_tag(conf_tag, value.as_ref()));
+                }
+            }
+        };
+    }
+
 	Ok(SongMetadata {
 		artists,
 		album_artists,
@@ -193,10 +274,11 @@ fn read_ape<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
 		composers,
 		genres,
 		labels,
+        tags,
 	})
 }
 
-fn read_vorbis<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
+fn read_vorbis<P: AsRef<Path>>(path: P, config_tags: HashMap<String, ConfTag>) -> Result<SongMetadata, Error> {
 	let file = fs::File::open(&path).map_err(|e| Error::Io(path.as_ref().to_owned(), e))?;
 	let source = OggStreamReader::new(file)?;
 
@@ -215,7 +297,14 @@ fn read_vorbis<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
 				"COMPOSER" => metadata.composers.push(value),
 				"GENRE" => metadata.genres.push(value),
 				"PUBLISHER" => metadata.labels.push(value),
-				_ => (),
+				_ => {
+                    // TODO: maybe move this outside of match
+                    for (conf_key, conf_tag) in &config_tags {
+                        if *conf_key == key {
+                            metadata.tags.insert(key.clone(), Tag::from_conf_tag(conf_tag.clone(), value.as_ref()));
+                        }
+                    }
+                }
 			}
 		}
 	}
@@ -223,7 +312,7 @@ fn read_vorbis<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
 	Ok(metadata)
 }
 
-fn read_opus<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
+fn read_opus<P: AsRef<Path>>(path: P, config_tags: HashMap<String, ConfTag>) -> Result<SongMetadata, Error> {
 	let headers = opus_headers::parse_from_path(path)?;
 
 	let mut metadata = SongMetadata::default();
@@ -241,7 +330,14 @@ fn read_opus<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
 				"COMPOSER" => metadata.composers.push(value),
 				"GENRE" => metadata.genres.push(value),
 				"PUBLISHER" => metadata.labels.push(value),
-				_ => (),
+				_ => {
+                    // TODO: maybe move this outside of match
+                    for (conf_key, conf_tag) in &config_tags {
+                        if *conf_key == key {
+                            metadata.tags.insert(key.clone(), Tag::from_conf_tag(conf_tag.clone(), value.as_ref()));
+                        }
+                    }
+                }
 			}
 		}
 	}
@@ -249,7 +345,7 @@ fn read_opus<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
 	Ok(metadata)
 }
 
-fn read_flac<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
+fn read_flac<P: AsRef<Path>>(path: P, config_tags: HashMap<String, ConfTag>) -> Result<SongMetadata, Error> {
 	let tag = metaflac::Tag::read_from_path(&path)
 		.map_err(|e| Error::Metaflac(path.as_ref().to_owned(), e))?;
 	let vorbis = tag
@@ -268,6 +364,18 @@ fn read_flac<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
 
 	let multivalue = |o: Option<&Vec<String>>| o.cloned().unwrap_or_default();
 
+    let mut tags = HashMap::new();
+    for (key, conf_tag) in config_tags {
+        // TODO: check if this is okay
+        if let Some(metavalue) = vorbis.comments.get(&key) {
+            if let Some(value) = metavalue.get(0) {
+                if value.len() >= 1 {
+                    tags.insert(key, Tag::from_conf_tag(conf_tag, value.as_ref()));
+                }
+            }
+        };
+    }
+
 	Ok(SongMetadata {
 		artists: multivalue(vorbis.artist()),
 		album_artists: multivalue(vorbis.album_artist()),
@@ -282,13 +390,17 @@ fn read_flac<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
 		composers: multivalue(vorbis.get("COMPOSER")),
 		genres: multivalue(vorbis.get("GENRE")),
 		labels: multivalue(vorbis.get("PUBLISHER")),
+        tags
 	})
 }
 
-fn read_mp4<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
+fn read_mp4<P: AsRef<Path>>(path: P, _config_tags: HashMap<String, ConfTag>) -> Result<SongMetadata, Error> {
 	let mut tag = mp4ameta::Tag::read_from_path(&path)
 		.map_err(|e| Error::Mp4aMeta(path.as_ref().to_owned(), e))?;
 	let label_ident = mp4ameta::FreeformIdent::new("com.apple.iTunes", "Label");
+
+    let tags = HashMap::new();
+    // TODO: decide how to do this, as mp4 doesn't use a HashMap, but a vector of comments
 
 	Ok(SongMetadata {
 		artists: tag.take_artists().collect(),
@@ -304,6 +416,7 @@ fn read_mp4<P: AsRef<Path>>(path: P) -> Result<SongMetadata, Error> {
 		composers: tag.take_composers().collect(),
 		genres: tag.take_genres().collect(),
 		labels: tag.take_strings_of(&label_ident).collect(),
+        tags
 	})
 }
 

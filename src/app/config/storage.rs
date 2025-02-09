@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +20,13 @@ pub struct MountDir {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Tag {
+    pub show: Option<bool>,
+    pub weight: Option<bool>,
+    pub collection: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Config {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub album_art_pattern: Option<String>,
@@ -29,4 +36,6 @@ pub struct Config {
 	pub ddns_update_url: Option<String>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub users: Vec<User>,
+	#[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub tags: HashMap<String, Tag>
 }

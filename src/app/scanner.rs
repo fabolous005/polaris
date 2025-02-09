@@ -3,6 +3,7 @@ use notify::{RecommendedWatcher, Watcher};
 use notify_debouncer_full::{Debouncer, FileIdMap};
 use rayon::{Scope, ThreadPoolBuilder};
 use regex::Regex;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -55,6 +56,7 @@ pub enum State {
 struct Parameters {
 	artwork_regex: Option<Regex>,
 	mount_dirs: Vec<config::MountDir>,
+    custom_tags: HashMap<String, crate::app::config::Tag>
 }
 
 impl PartialEq for Parameters {
@@ -180,9 +182,11 @@ impl Scanner {
 	async fn read_parameters(&self) -> Parameters {
 		let album_art_pattern = self.config_manager.get_index_album_art_pattern().await;
 		let artwork_regex = Regex::new(&format!("(?i){}", &album_art_pattern)).ok();
+        let custom_tags = self.config_manager.get_custom_tags().await;
 		Parameters {
 			artwork_regex,
 			mount_dirs: self.config_manager.get_mounts().await,
+            custom_tags,
 		}
 	}
 
@@ -372,6 +376,7 @@ impl Scan {
 		let directories_output = self.directories_output.clone();
 		let songs_output = self.songs_output.clone();
 		let artwork_regex = self.parameters.artwork_regex.clone();
+        let custom_tags = self.parameters.custom_tags.clone();
 
 		let thread_pool = ThreadPoolBuilder::new().num_threads(num_threads).build()?;
 		thread_pool.scope({
@@ -385,6 +390,7 @@ impl Scan {
 							directories_output.clone(),
 							songs_output.clone(),
 							artwork_regex.clone(),
+                            custom_tags.clone(),
 						);
 					});
 				}
@@ -402,6 +408,7 @@ fn process_directory<P: AsRef<Path>, Q: AsRef<Path>>(
 	directories_output: Sender<Directory>,
 	songs_output: Sender<Song>,
 	artwork_regex: Option<Regex>,
+    custom_tags: HashMap<String, crate::app::config::Tag>
 ) {
 	let read_dir = match fs::read_dir(&real_path) {
 		Ok(read_dir) => read_dir,
@@ -445,6 +452,7 @@ fn process_directory<P: AsRef<Path>, Q: AsRef<Path>>(
 		let name = entry.file_name();
 		let entry_real_path = real_path.as_ref().join(&name);
 		let entry_virtual_path = virtual_path.as_ref().join(&name);
+        let custom_tags = custom_tags.clone();
 
 		if is_dir {
 			scope.spawn({
@@ -459,10 +467,11 @@ fn process_directory<P: AsRef<Path>, Q: AsRef<Path>>(
 						directories_output,
 						songs_output,
 						artwork_regex,
+                        custom_tags
 					);
 				}
 			});
-		} else if let Some(metadata) = formats::read_metadata(&entry_real_path) {
+		} else if let Some(metadata) = formats::read_metadata(&entry_real_path, custom_tags) {
 			songs.push(Song {
 				real_path: entry_real_path.clone(),
 				virtual_path: entry_virtual_path.clone(),

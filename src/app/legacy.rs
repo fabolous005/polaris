@@ -38,6 +38,7 @@ pub fn read_legacy_config(
 		mount_dirs,
 		ddns_update_url: None,
 		users: users.into_values().collect(),
+        tags: HashMap::new(),
 	}))
 }
 

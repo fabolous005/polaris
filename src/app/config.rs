@@ -1,7 +1,5 @@
 use std::{
-	path::{Path, PathBuf},
-	sync::Arc,
-	time::Duration,
+	collections::HashMap, path::{Path, PathBuf}, sync::Arc, time::Duration
 };
 
 use log::{error, info};
@@ -15,9 +13,11 @@ use crate::app::Error;
 mod mounts;
 pub mod storage;
 mod user;
+pub mod tag;
 
 pub use mounts::*;
 pub use user::*;
+pub use tag::*;
 
 use super::auth;
 
@@ -27,6 +27,7 @@ pub struct Config {
 	pub ddns_update_url: Option<http::Uri>,
 	pub mount_dirs: Vec<MountDir>,
 	pub users: Vec<User>,
+    pub tags: HashMap<String, Tag>
 }
 
 impl TryFrom<storage::Config> for Config {
@@ -49,6 +50,8 @@ impl TryFrom<storage::Config> for Config {
 			None => None,
 		};
 
+        config.tags = c.tags.into_iter().map(|(s, t)| (s, Tag::try_from(t).unwrap())).collect();
+
 		Ok(config)
 	}
 }
@@ -60,6 +63,7 @@ impl From<Config> for storage::Config {
 			mount_dirs: c.mount_dirs.into_iter().map(|d| d.into()).collect(),
 			ddns_update_url: c.ddns_update_url.map(|u| u.to_string()),
 			users: c.users.into_iter().map(|u| u.into()).collect(),
+            tags: c.tags.into_iter().map(|(s, t)| (s, storage::Tag::try_from(t).unwrap())).collect(),
 		}
 	}
 }
@@ -275,6 +279,11 @@ impl Manager {
 	pub async fn set_mounts(&self, mount_dirs: Vec<storage::MountDir>) -> Result<(), Error> {
 		self.mutate_fallible(|c| c.set_mounts(mount_dirs)).await
 	}
+
+    pub async fn get_custom_tags(&self) -> HashMap<String, Tag> {
+        let config = self.config.read().await;
+        config.tags.clone()
+    }
 }
 
 #[cfg(test)]

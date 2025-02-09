@@ -8,3 +8,11 @@ source = 'test-data/small-collection'
 name = 'test_user'
 initial_password = 'very_secret_password'
 admin = true
+
+[tags.INSTRUMENT]
+show = true
+weight = true
+collection = true
+
+# INSTRUMENT=violin:2
+
