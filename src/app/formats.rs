@@ -369,6 +369,7 @@ fn read_flac<P: AsRef<Path>>(path: P, config_tags: HashMap<String, ConfTag>) -> 
             if let Some(value) = metavalue.first() {
                 if !value.is_empty() {
                     info!("Found custom tag {key} with value {value}");
+                    info!("Value is {:?}", Tag::from_conf_tag(conf_tag, value.as_ref()));
                     tags.insert(key, Tag::from_conf_tag(conf_tag, value.as_ref()));
                 }
             }
