@@ -1,6 +1,6 @@
-use id3::TagLike;
+use id3::{Content, TagLike};
 use lewton::inside_ogg::OggStreamReader;
-use log::{error, info};
+use log::error;
 use std::fs;
 use std::io::{Seek, SeekFrom};
 use std::path::Path;
@@ -20,10 +20,10 @@ pub struct WeightTag {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TagKind {
-    FieldCollection(Vec<String>),
     FieldSingle(String),
-    AmountCollection(Vec<WeightTag>),
+    FieldCollection(Vec<String>),
     AmountSingle(WeightTag),
+    AmountCollection(Vec<WeightTag>),
 }
 
 impl Default for TagKind {
@@ -38,28 +38,84 @@ pub struct Tag {
     value: TagKind,
 }
 
+// TODO: improve error handling in these functions
 impl Tag {
-    fn from_conf_tag(conf_tag: ConfTag, metavalue: &str) -> Self {
+    fn from_conf_tag(conf_tag: ConfTag, metavalue: String) -> Self {
+        let value = match (conf_tag.weight, conf_tag.collection) {
+            (false, false) => TagKind::FieldSingle(metavalue),
+            (false, true) => TagKind::FieldCollection(
+                // WARN: this will store a collection even when there's just one field
+                metavalue.split(conf_tag.separator.unwrap_or(';')).map(String::from).collect()
+            ),
+            (true, false) => {
+                if let Some((value, weight)) = metavalue.split_once(':') {
+                    if let Ok(weight) = weight.parse() {
+                        TagKind::AmountSingle(WeightTag {value: value.to_string(), weight})
+                    } else {
+                        TagKind::FieldSingle(value.to_string())
+                    }
+                } else {
+                    TagKind::FieldSingle(metavalue)
+                }
+            }
+            (true, true) => TagKind::AmountCollection(metavalue.split(conf_tag.separator.unwrap_or(';')).map(|s|
+                // WARN: this will collect null values for non parsing floats
+                if let Some((value, weight)) = s.split_once(':') {
+                    if let Ok(weight) = weight.parse() {
+                        WeightTag {value: value.to_string(), weight}
+                    } else {
+                        WeightTag {value: value.to_string(), weight: 0.0}
+                    }
+                } else {
+                    WeightTag {value: s.to_string(), weight: 0.0}
+                }
+            ).collect())
+        };
+
         Self {
             show: conf_tag.show,
-            value: match (conf_tag.weight, conf_tag.collection) {
-                (false, false) => TagKind::FieldSingle(metavalue.into()),
-                (false, true) => TagKind::FieldCollection(
-                    metavalue.split(';').map(|s| String::from(s)).collect()
-                ),
-                (true, false) => TagKind::AmountSingle(
-                    metavalue.split_once(':').map(|(value, weight)|
-                        WeightTag {value: value.into(), weight: weight.parse().unwrap()}
-                    ).unwrap()
-                ),
-                (true, true) => TagKind::AmountCollection(metavalue.split(';').map(|s|
-                        s.split_once(':').map(|(value, weight)|
-                            WeightTag {value: value.into(), weight: weight.parse().unwrap()}
-                        ).unwrap()
-                    ).collect()
-                )
-            }
+            value
         }
+    }
+
+    fn from_conf_tag_vec(conf_tag: ConfTag, metavalue: Vec<String>) -> Option<Self> {
+        let value = match (conf_tag.weight, conf_tag.collection) {
+                (false, false) => {
+                    let value = metavalue.first()?.to_string();
+                    TagKind::FieldSingle(value)
+                },
+                (false, true) => TagKind::FieldCollection(metavalue),
+                (true, false) => {
+                    let combined = metavalue.first()?.to_string();
+                    // TODO: do some logging in these alternative cases
+                    if let Some((value, weight)) = combined.split_once(':') {
+                        if let Ok(weight) = weight.parse() {
+                            TagKind::AmountSingle(WeightTag {value: value.to_string(), weight})
+                        } else {
+                            TagKind::FieldSingle(value.to_string())
+                        }
+                    } else {
+                        TagKind::FieldSingle(combined)
+                    }
+                },
+                (true, true) => TagKind::AmountCollection(metavalue.into_iter().map(|metavalue|
+                    // WARN: this will collect null values for non parsing floats
+                    if let Some((value, weight)) = metavalue.split_once(':') {
+                        if let Ok(weight) = weight.parse() {
+                            WeightTag {value: value.to_string(), weight}
+                        } else {
+                            WeightTag {value: value.to_string(), weight: 0.0}
+                        }
+                    } else {
+                        WeightTag {value: metavalue.to_string(), weight: 0.0}
+                    }
+                ).collect())
+            };
+
+        Some(Self {
+            show: conf_tag.show,
+            value,
+        })
     }
 }
 
@@ -81,16 +137,16 @@ pub struct SongMetadata {
     pub tags: HashMap<String, Tag>,
 }
 
-pub fn read_metadata<P: AsRef<Path>>(path: P, tags: HashMap<String, ConfTag>) -> Option<SongMetadata> {
+pub fn read_metadata<P: AsRef<Path>>(path: P, config_tags: HashMap<String, ConfTag>) -> Option<SongMetadata> {
 	let data = match utils::get_audio_format(&path) {
-		Some(AudioFormat::AIFF) => read_id3(&path, tags),
-		Some(AudioFormat::FLAC) => read_flac(&path, tags),
-		Some(AudioFormat::MP3) => read_mp3(&path, tags),
-		Some(AudioFormat::OGG) => read_vorbis(&path, tags),
-		Some(AudioFormat::OPUS) => read_opus(&path, tags),
-		Some(AudioFormat::WAVE) => read_id3(&path, tags),
-		Some(AudioFormat::APE) | Some(AudioFormat::MPC) => read_ape(&path, tags),
-		Some(AudioFormat::MP4) | Some(AudioFormat::M4B) => read_mp4(&path, tags),
+		Some(AudioFormat::AIFF) => read_id3(&path, config_tags),
+		Some(AudioFormat::FLAC) => read_flac(&path, config_tags),
+		Some(AudioFormat::MP3) => read_mp3(&path, config_tags),
+		Some(AudioFormat::OGG) => read_vorbis(&path, config_tags),
+		Some(AudioFormat::OPUS) => read_opus(&path, config_tags),
+		Some(AudioFormat::WAVE) => read_id3(&path, config_tags),
+		Some(AudioFormat::APE) | Some(AudioFormat::MPC) => read_ape(&path, config_tags),
+		Some(AudioFormat::MP4) | Some(AudioFormat::M4B) => read_mp4(&path, config_tags),
 		None => return None,
 	};
 	match data {
@@ -156,14 +212,33 @@ fn read_id3_from_file<P: AsRef<Path>>(file: &fs::File, path: P, config_tags: Has
     let mut tags = HashMap::new();
     for (key, conf_tag) in config_tags {
         // let metavalue: &str = tag.get("key").and_then(|f| f.content().text()).or(|| continue).into();
-        let metavalue = if let Some(metavalue) = tag.get(&key).and_then(|f| f.content().text()) {
-            metavalue
-        } else {
-            continue;
-        };
-        if metavalue.len() >= 1 {
-            tags.insert(key, Tag::from_conf_tag(conf_tag, metavalue));
-        };
+        //let metavalue = if let Some(metavalue) = tag.get(&key).and_then(|f| f.content().text()) {
+        //    metavalue
+        //} else {
+        //    continue;
+        //};
+        //if !metavalue.is_empty() {
+        //    tags.insert(key, Tag::from_conf_tag(conf_tag, metavalue.to_string()));
+        //};
+        if let Some(tag) = tag.get(&key) {
+            let content = tag.content();
+            match content {
+                Content::Text(_) => {
+                    tags.insert(key, Tag::from_conf_tag(conf_tag, content.text().unwrap().to_string()));
+                },
+                Content::ExtendedText(_) => {
+                    let extended_text = content.extended_text().unwrap();
+                    if let Ok(weight) = extended_text.value.parse() {
+                        tags.insert(key, Tag { show: conf_tag.show, value: TagKind::AmountSingle(WeightTag { value: extended_text.description.clone(), weight }) });
+                    } else {
+                        tags.insert(key, Tag { show: conf_tag.show, value: TagKind::FieldSingle(extended_text.description.clone())});
+                    }
+                }
+                Content::Link(_) => {},
+                _ => {}
+            }
+        }
+
     }
 
 	Ok(SongMetadata {
@@ -251,8 +326,8 @@ fn read_ape<P: AsRef<Path>>(path: P, config_tags: HashMap<String, ConfTag>) -> R
     for (key, conf_tag) in config_tags {
         if let Some(metavalue) = tag.item(key.as_ref()) {
             if let Some(value) = ape_ext::read_string(metavalue) {
-                if value.len() >= 1 {
-                    tags.insert(key, Tag::from_conf_tag(conf_tag, value.as_ref()));
+                if !value.is_empty() {
+                    tags.insert(key, Tag::from_conf_tag(conf_tag, value.clone()));
                 }
             }
         };
@@ -299,7 +374,7 @@ fn read_vorbis<P: AsRef<Path>>(path: P, config_tags: HashMap<String, ConfTag>) -
                     // TODO: maybe move this outside of match
                     for (conf_key, conf_tag) in &config_tags {
                         if *conf_key == key {
-                            metadata.tags.insert(key.clone(), Tag::from_conf_tag(conf_tag.clone(), value.as_ref()));
+                            metadata.tags.insert(key.clone(), Tag::from_conf_tag(*conf_tag, value.clone()));
                         }
                     }
                 }
@@ -332,7 +407,7 @@ fn read_opus<P: AsRef<Path>>(path: P, config_tags: HashMap<String, ConfTag>) -> 
                     // TODO: maybe move this outside of match
                     for (conf_key, conf_tag) in &config_tags {
                         if *conf_key == key {
-                            metadata.tags.insert(key.clone(), Tag::from_conf_tag(conf_tag.clone(), value.as_ref()));
+                            metadata.tags.insert(key.clone(), Tag::from_conf_tag(*conf_tag, value.clone()));
                         }
                     }
                 }
@@ -364,14 +439,11 @@ fn read_flac<P: AsRef<Path>>(path: P, config_tags: HashMap<String, ConfTag>) -> 
 
     let mut tags = HashMap::new();
     for (key, conf_tag) in config_tags {
-        // TODO: check if this is okay (metavalue.first)
         if let Some(metavalue) = vorbis.comments.get(&key) {
-            if let Some(value) = metavalue.first() {
-                if !value.is_empty() {
-                    info!("Found custom tag {key} with value {value}");
-                    info!("Value is {:?}", Tag::from_conf_tag(conf_tag, value.as_ref()));
-                    tags.insert(key, Tag::from_conf_tag(conf_tag, value.as_ref()));
-                }
+            if metavalue.len() > 1 {
+                tags.insert(key, Tag::from_conf_tag_vec(conf_tag, metavalue.to_vec()).unwrap());
+            } else {
+                tags.insert(key, Tag::from_conf_tag(conf_tag, metavalue.first().unwrap().to_string()));
             }
         };
     }

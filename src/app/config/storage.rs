@@ -24,6 +24,7 @@ pub struct Tag {
     pub show: Option<bool>,
     pub weight: Option<bool>,
     pub collection: Option<bool>,
+    pub separator: Option<char>
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]

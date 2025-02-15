@@ -6,6 +6,9 @@ pub struct Tag {
     pub show: bool,
     pub weight: bool,
     pub collection: bool,
+    // keep option here so we can have different defaults for
+    // different audio formats
+    pub separator: Option<char>
 }
 
 impl TryFrom<storage::Tag> for Tag {
@@ -16,6 +19,7 @@ impl TryFrom<storage::Tag> for Tag {
             show: tag.show.unwrap_or(false),
             weight: tag.weight.unwrap_or(false),
             collection: tag.collection.unwrap_or(false),
+            separator: tag.separator
         })
     }
 }
@@ -35,7 +39,8 @@ impl From<Tag> for storage::Tag {
         Self {
             show: Some(tag.show),
             weight: Some(tag.weight),
-            collection: Some(tag.collection)
+            collection: Some(tag.collection),
+            separator: tag.separator.or(None)
         }
     }
 }
